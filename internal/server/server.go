@@ -99,6 +99,7 @@ type Server struct {
 	avatarKey   []byte             // HMAC key for signing the same-origin /api/avatar proxy URLs
 	mergeTmpl   *template.Template // renders the "copy to merge" command; nil disables it
 	commentTmpl *template.Template // renders a custom PR-comment body; nil uses the default summary
+	indexHTML   []byte             // index.html with KONFLATE_BASE_PATH replaced at startup
 }
 
 // New assembles a Server. ui is the embedded UI filesystem (rooted at the
@@ -134,6 +135,7 @@ func New(cfg *config.Config, prov provider.Provider, eng Engine, ui fs.FS, log *
 		relist:       make(chan struct{}, 1),
 		checkWake:    make(chan struct{}, 1),
 		checkPending: make(map[string]struct{}),
+		indexHTML:    renderIndexHTML(ui, cfg.BasePath),
 	}
 
 	// Durability: persist rendered diffs under the (operator-persisted) cache
@@ -771,6 +773,24 @@ func (s *Server) refreshStale(now time.Time) {
 	}
 }
 
+// indexHTMLPlaceholder is replaced at startup with a small script that exposes
+// the configured base path to the SPA. It must match the literal in
+// internal/web/index.html.
+const indexHTMLPlaceholder = "%KONFLATE_BASE_PATH%"
+
+// renderIndexHTML reads index.html from the embedded UI filesystem and replaces
+// the base-path placeholder. If index.html is absent (a clean checkout before
+// the UI is built), it returns nil and the UI simply won't be served — the same
+// behaviour as before base-path support.
+func renderIndexHTML(ui fs.FS, basePath string) []byte {
+	b, err := fs.ReadFile(ui, "index.html")
+	if err != nil {
+		return nil
+	}
+	return []byte(strings.ReplaceAll(string(b), indexHTMLPlaceholder,
+		fmt.Sprintf("window.KONFLATE_BASE_PATH=%q", basePath)))
+}
+
 // metricsHandler builds the mux for the separate, optional metrics listener:
 // /metrics only, kept off the main (possibly public-facing) port. Health
 // probes are NOT served here — /healthz and /readyz live on the main mux, so
@@ -786,33 +806,35 @@ func (s *Server) metricsHandler() http.Handler {
 // misconfiguration is visible rather than a silent 404. The /healthz and
 // /readyz probes are served here (the pair standard: health rides the main
 // port so the optional metrics listener can be disabled without breaking
-// probes).
+// probes). When Config.BasePath is set, every route is registered under that
+// prefix; the proxy is expected to forward requests with the prefix preserved.
 func (s *Server) mainHandler() http.Handler {
 	mux := http.NewServeMux()
+	p := s.cfg.BasePath
 
-	mux.HandleFunc("GET /healthz", handleHealth)
-	mux.HandleFunc("GET /readyz", handleHealth)
+	mux.HandleFunc("GET "+routePath(p, "/healthz"), handleHealth)
+	mux.HandleFunc("GET "+routePath(p, "/readyz"), handleHealth)
 
-	mux.HandleFunc("GET /api/meta", s.handleMeta)
-	mux.HandleFunc("GET /api/prs", s.handleListPRs)
-	mux.HandleFunc("GET /api/prs/{number}/diff", s.handleDiff)
-	mux.HandleFunc("GET /api/prs/{number}/summary", s.handleSummary)
-	mux.HandleFunc("GET /api/avatar", s.handleAvatar)
-	mux.HandleFunc("GET /ws", s.hub.serveWS)
+	mux.HandleFunc("GET "+routePath(p, "/api/meta"), s.handleMeta)
+	mux.HandleFunc("GET "+routePath(p, "/api/prs"), s.handleListPRs)
+	mux.HandleFunc("GET "+routePath(p, "/api/prs/{number}/diff"), s.handleDiff)
+	mux.HandleFunc("GET "+routePath(p, "/api/prs/{number}/summary"), s.handleSummary)
+	mux.HandleFunc("GET "+routePath(p, "/api/avatar"), s.handleAvatar)
+	mux.HandleFunc("GET "+routePath(p, "/ws"), s.hub.serveWS)
 
 	// No manual-refresh endpoint: konflate auto-refreshes (per-PR staleness +
 	// re-list) so a public instance exposes no unauthenticated trigger. The
 	// inbound webhook/push endpoints are served only when their own secret is
 	// configured; otherwise they return 501 so a misconfiguration is visible.
 	if s.cfg.PushEnabled() {
-		mux.HandleFunc("POST /api/prs/{number}/refresh", s.handlePush)
+		mux.HandleFunc("POST "+routePath(p, "/api/prs/{number}/refresh"), s.handlePush)
 	} else {
-		mux.HandleFunc("POST /api/prs/{number}/refresh", handleDisabled)
+		mux.HandleFunc("POST "+routePath(p, "/api/prs/{number}/refresh"), handleDisabled)
 	}
 	if s.cfg.WebhookEnabled() {
-		mux.HandleFunc("POST /hooks", s.handleWebhook)
+		mux.HandleFunc("POST "+routePath(p, "/hooks"), s.handleWebhook)
 	} else {
-		mux.HandleFunc("POST /hooks", handleDisabled)
+		mux.HandleFunc("POST "+routePath(p, "/hooks"), handleDisabled)
 	}
 
 	// Read-only MCP endpoint (opt-in): exposes the same rendered-diff analysis as
@@ -822,14 +844,37 @@ func (s *Server) mainHandler() http.Handler {
 	// against it and panic at registration).
 	if s.cfg.MCPEnabled() {
 		h := s.mcpHandler()
-		mux.Handle("POST /mcp", h)
-		mux.Handle("GET /mcp", h)
-		mux.Handle("DELETE /mcp", h)
+		mux.Handle("POST "+routePath(p, "/mcp"), h)
+		mux.Handle("GET "+routePath(p, "/mcp"), h)
+		mux.Handle("DELETE "+routePath(p, "/mcp"), h)
 	}
 
-	mux.Handle("GET /", s.uiHandler())
+	if p != "" {
+		// Redirect the bare prefix to the trailing-slash form so relative asset
+		// URLs generated by Vite resolve against the base path, not its parent.
+		mux.HandleFunc("GET "+p, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, p+"/", http.StatusMovedPermanently)
+		})
+	}
+
+	ui := s.uiHandler()
+	if p != "" {
+		// The file server expects paths relative to the embedded FS root;
+		// strip the configured prefix before serving static assets.
+		ui = http.StripPrefix(p, ui)
+	}
+	mux.Handle("GET "+routePath(p, "/"), ui)
 
 	return s.recoverer(s.accessLog(s.securityHeaders(mux)))
+}
+
+// routePath joins a base path prefix with a route pattern. An empty prefix
+// returns the route unchanged.
+func routePath(prefix, route string) string {
+	if prefix == "" {
+		return route
+	}
+	return prefix + route
 }
 
 // securityHeaders applies a strict CSP and related headers to every response.

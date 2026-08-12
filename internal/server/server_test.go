@@ -1455,6 +1455,56 @@ func TestServer_HealthAndSecurityHeaders(t *testing.T) {
 // TestServer_MetricsHandler asserts the optional metrics listener is
 // metrics-only: the /healthz and /readyz probes live on the main mux (the pair
 // standard), so disabling metrics can never break the probes.
+func TestServer_BasePathRouting(t *testing.T) {
+	t.Parallel()
+	cfg := ghCfg("tok")
+	cfg.BasePath = "/platform/konflate"
+	ui := fstest.MapFS{
+		"index.html":           &fstest.MapFile{Data: []byte("<!doctype html><title>konflate</title><script>%KONFLATE_BASE_PATH%</script>")},
+		"assets/app-9f8e7d.js": &fstest.MapFile{Data: []byte("console.log(1)")},
+	}
+	s := New(cfg, &fakeProvider{}, okEngine(), ui, discardLog())
+	h := s.mainHandler()
+
+	// Routes live under the configured prefix.
+	rec := do(h, "GET", "/platform/konflate/healthz", nil, nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "ok") {
+		t.Errorf("base-path healthz: %d %q", rec.Code, rec.Body.String())
+	}
+	if rec := do(h, "GET", "/healthz", nil, nil); rec.Code != http.StatusNotFound {
+		t.Errorf("root healthz without prefix: %d, want 404", rec.Code)
+	}
+
+	// Bare prefix redirects to the trailing-slash form so relative asset URLs
+	// resolve against the base path.
+	rec = do(h, "GET", "/platform/konflate", nil, nil)
+	if rec.Code != http.StatusMovedPermanently {
+		t.Errorf("bare prefix redirect status = %d, want 301", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/platform/konflate/" {
+		t.Errorf("bare prefix redirect Location = %q, want /platform/konflate/", got)
+	}
+
+	// index.html is served with the base-path placeholder replaced.
+	rec = do(h, "GET", "/platform/konflate/", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Errorf("base-path index: %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `window.KONFLATE_BASE_PATH="/platform/konflate"`) {
+		t.Errorf("index.html missing base-path injection: %q", body)
+	}
+
+	// Static assets are reachable under the prefix and keep their cache headers.
+	rec = do(h, "GET", "/platform/konflate/assets/app-9f8e7d.js", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Errorf("base-path asset: %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Errorf("asset Cache-Control = %q, want immutable", got)
+	}
+}
+
 func TestServer_MetricsHandler(t *testing.T) {
 	t.Parallel()
 	s := newTestServer(t, ghCfg("tok"), &fakeProvider{}, okEngine())

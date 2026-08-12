@@ -563,3 +563,20 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].readinessProbe.httpGet.port
           value: http
+
+  - it: prefixes probe paths with basePath and emits KONFLATE_BASE_PATH
+    template: deployment.tpl
+    set:
+      config.basePath: /platform/konflate
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KONFLATE_BASE_PATH
+            value: /platform/konflate
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /platform/konflate/healthz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /platform/konflate/readyz
