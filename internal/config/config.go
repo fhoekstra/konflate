@@ -122,8 +122,9 @@ type Config struct {
 
 	// BasePath is the URL path prefix konflate is served under (e.g.
 	// /platform/konflate). Empty means the root path. The server registers every
-	// route under this prefix, prefixes internally-generated URLs with it, and
-	// injects it into the SPA at serve time. It must start with / and must not end
+	// route on the main listener under this prefix, prefixes internally-generated
+	// URLs with it, and injects it into the SPA at serve time. The separate metrics
+	// listener's /metrics is not prefixed. It must start with / and must not end
 	// with /; it is normalized in Load.
 	BasePath string `env:"KONFLATE_BASE_PATH"`
 
@@ -566,7 +567,7 @@ func normalizeBasePath(cfg *Config) error {
 			return fmt.Errorf("config: KONFLATE_BASE_PATH must not contain empty, ., or .. segments")
 		}
 	}
-	cfg.BasePath = strings.TrimSuffix(p, "/")
+	cfg.BasePath = "/" + strings.Trim(p, "/")
 	return nil
 }
 

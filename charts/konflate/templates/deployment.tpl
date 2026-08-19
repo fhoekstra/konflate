@@ -250,15 +250,19 @@ spec:
           {{- end }}
           livenessProbe:
             {{- $probe := merge (dict) .Values.livenessProbe -}}
+            {{- if $probe.httpGet -}}
             {{- $httpGet := merge (dict) $probe.httpGet -}}
             {{- $_ := set $httpGet "path" (include "konflate.prefixedPath" (dict "path" $probe.httpGet.path "Values" $.Values)) -}}
             {{- $_ := set $probe "httpGet" $httpGet -}}
+            {{- end -}}
             {{- tpl (toYaml $probe) $ | nindent 12 }}
           readinessProbe:
             {{- $probe := merge (dict) .Values.readinessProbe -}}
+            {{- if $probe.httpGet -}}
             {{- $httpGet := merge (dict) $probe.httpGet -}}
             {{- $_ := set $httpGet "path" (include "konflate.prefixedPath" (dict "path" $probe.httpGet.path "Values" $.Values)) -}}
             {{- $_ := set $probe "httpGet" $httpGet -}}
+            {{- end -}}
             {{- tpl (toYaml $probe) $ | nindent 12 }}
           {{- with .Values.resources }}
           resources:

@@ -542,6 +542,8 @@ func TestLoad_BasePath(t *testing.T) {
 		{"simple path", "/platform/konflate", "/platform/konflate", ""},
 		{"trailing slash trimmed", "/platform/konflate/", "/platform/konflate", ""},
 		{"leading space trimmed", "  /platform/konflate  ", "/platform/konflate", ""},
+		{"leading slashes normalized", "//a", "/a", ""},
+		{"trailing slashes normalized", "/a//", "/a", ""},
 		{"missing leading slash errors", "platform/konflate", "", "must start with /"},
 		{"empty segment errors", "/platform//konflate", "", "empty"},
 		{"dot segment errors", "/./konflate", "", "."},

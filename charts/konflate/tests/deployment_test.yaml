@@ -580,3 +580,35 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].readinessProbe.httpGet.path
           value: /platform/konflate/readyz
+
+  - it: allows liveness/readiness probe overrides without httpGet
+    template: deployment.tpl
+    set:
+      livenessProbe:
+        httpGet: null
+        exec:
+          command: ["true"]
+      readinessProbe:
+        httpGet: null
+        exec:
+          command: ["true"]
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.exec.command[0]
+          value: "true"
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.exec.command[0]
+          value: "true"
+
+  - it: prefixes startupProbe path with basePath when configured
+    template: deployment.tpl
+    set:
+      config.basePath: /platform/konflate
+      startupProbe:
+        httpGet:
+          path: /readyz
+          port: http
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /platform/konflate/readyz

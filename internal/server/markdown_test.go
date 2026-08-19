@@ -320,3 +320,28 @@ func TestReviewURLFromRequest_BasePath(t *testing.T) {
 		t.Errorf("base path: got %q, want %q", got, want)
 	}
 }
+
+func TestReviewURL_AppendsBasePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		public   string
+		basePath string
+		want     string
+	}{
+		{"empty public URL returns empty", "", "/platform/konflate", ""},
+		{"root base path unchanged", "https://konflate.example", "", "https://konflate.example/#/pr/7"},
+		{"appends basePath", "https://konflate.example", "/platform/konflate", "https://konflate.example/platform/konflate/#/pr/7"},
+		{"does not double-append", "https://konflate.example/platform/konflate", "/platform/konflate", "https://konflate.example/platform/konflate/#/pr/7"},
+		{"trailing slash normalized", "https://konflate.example/", "/platform/konflate", "https://konflate.example/platform/konflate/#/pr/7"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Server{cfg: &config.Config{PublicURL: tt.public, BasePath: tt.basePath}}
+			if got := s.reviewURL(7); got != tt.want {
+				t.Errorf("reviewURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
